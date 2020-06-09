@@ -56,4 +56,5 @@ func main() {
 	template := renderTemplate(content)
 	fileName := strings.SplitN(*filePtr, ".", 2)[0] + ".html"
 	saveFile(template, fileName)
+	// fmt.Println(template)
 }
