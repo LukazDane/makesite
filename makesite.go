@@ -50,6 +50,7 @@ func saveFile(buffer string, fileName string) bool {
 
 func main() {
 	filePtr := flag.String("file", "first-post.txt", "name of file contents to read")
+	dirPtr := flag.String("dir", ".", "directory with all files/root")
 	flag.Parse()
 
 	content := readFile(*filePtr)
