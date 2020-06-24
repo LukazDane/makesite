@@ -1,20 +1,62 @@
 package main
 
 import (
-	"bytes"
 	"flag"
+	"fmt"
 	"html/template"
 	"io/ioutil"
+	"os"
 	"strings"
 )
 
-type post struct {
-	User    string
-	Content string
+// type post struct {
+// 	User    string
+// 	Content string
+// }
+
+func main() {
+	filePtr := flag.String("file", "", "name of file contents to read")
+	dirPtr := flag.String("dir", ".", "directory with all files/root")
+	flag.Parse()
+
+	if *filePtr != "" {
+		makePost(*filePtr)
+	} else {
+		parseDir(*dirPtr)
+	}
+	// content := readFile(*filePtr)
+	// template := renderTemplate(content)
+	// fileName := strings.SplitN(*filePtr, ".", 2)[0] + ".html"
+	// saveFile(template, fileName)
+	// fmt.Println(template)
+}
+
+func parseDir(dir string) {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		fmt.Print("Error reading files: ")
+		fmt.Println(err)
+	} else {
+		for _, f := range files {
+			if f.IsDir() {
+				parseDir(fmt.Sprintf("%s/%s", dir, f.Name()))
+			} else if strings.HasSuffix(f.Name(), ".txt") {
+				fmt.Println(f.Name())
+				fmt.Println(dir + "/" + f.Name())
+				makePost(dir + "/" + f.Name())
+			}
+		}
+	}
+}
+
+func makePost(name string) {
+	content := readFile(name)
+	newName := strings.Split(name, ".txt")[0] + ".html"
+	renderTemplate(newName, content)
 }
 
 func readFile(fileName string) string {
-	fileContents, err := ioutil.ReadFile("first-post.txt")
+	fileContents, err := ioutil.ReadFile(fileName)
 	if err != nil {
 		panic(err)
 	}
@@ -22,19 +64,21 @@ func readFile(fileName string) string {
 	return string(fileContents)
 }
 
-func renderTemplate(content string) string {
+func renderTemplate(fileName string, text string) {
 	paths := []string{
 		"template.tmpl",
 	}
 
-	buff := new(bytes.Buffer)
 	t := template.Must(template.New("template.tmpl").ParseFiles(paths...))
-	err := t.Execute(buff, post{User: "Luke", Content: content})
+	file, err := os.Create(fileName)
 	if err != nil {
 		panic(err)
 	}
 
-	return buff.String()
+	err = t.Execute(file, text)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func saveFile(buffer string, fileName string) bool {
@@ -48,14 +92,13 @@ func saveFile(buffer string, fileName string) bool {
 	return true
 }
 
-func main() {
-	filePtr := flag.String("file", "first-post.txt", "name of file contents to read")
-	dirPtr := flag.String("dir", ".", "directory with all files/root")
-	flag.Parse()
+// func checkFlags(name string) bool {
+// 	dirFlag := false
+// 	flag.Visit(func(f *flag.Flag) {
+// 		if f.Name == name {
+// 			dirFlag = true
+// 		}
+// 	})
 
-	content := readFile(*filePtr)
-	template := renderTemplate(content)
-	fileName := strings.SplitN(*filePtr, ".", 2)[0] + ".html"
-	saveFile(template, fileName)
-	// fmt.Println(template)
-}
+// 	return dirFlag
+// }
