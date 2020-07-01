@@ -1,7 +1,9 @@
 package main
 
 import (
+	"container/list"
 	"context"
+	"crypto/sha1"
 	"flag"
 	"fmt"
 	"html/template"
@@ -10,16 +12,132 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/oauth2/clientcredentials"
-
+	"github.com/joho/godotenv"
 	"github.com/zmb3/spotify"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
-// type post struct {
-// 	User    string
-// 	Content string
-// }
+// set up structs to hold song/playlist/album info
 
+type Song struct {
+	duration int64  //song length in seconds
+	title    string //song title
+	artist   *Artist
+}
+
+type Playlist struct {
+	title       string
+	description string
+	duration    int64
+	publishedAt int32
+	songs       []*Song
+}
+
+type RecentlyPlayed struct {
+	capacity int
+	size     int
+	cache    map[int]*list.Element
+	lru      *list.List
+}
+
+func NewRecentlyPlayed(capacity int) *RecentlyPlayed {
+	rp := RecentlyPlayed{
+		capacity: capacity,
+		size:     0,
+		lru:      list.New(),
+		cache:    make(map[string]*list.Element),
+	}
+	return &rp
+}
+
+type Player struct {
+	playProgress       int
+	RecentlyPlayedList *RecentlyPlayed
+}
+
+func NewPlayer() *Player {
+	p := Player{
+		RecentlyPlayedList: NewRecentlyPlayed(30),
+	}
+	return &p
+}
+func (player *Player) Play(playlist *Playlist) {
+	if cached, playlist := player.RecentlyPlayedList.Get(playlist.hash()); cached {
+		// Play from cache...
+	} else {
+		// Fetch over the network and start playing...
+		player.RecentlyPlayedList.Set(playlist)
+	}
+}
+func (rp *RecentlyPlayed) Get(key string) (*Playlist, bool) {
+	if elem, present := rp.cache[key]; present {
+		rp.lru.MoveToFront(elem)
+		return elem.Value.(*Playlist), true
+	} else {
+		return nil, false
+	}
+}
+func (playlist *Playlist) hash() string {
+	hash := sha1.New()
+	s := fmt.Sprintf(
+		"%d-%s-%s-%d",
+		playlist.duration,
+		playlist.title,
+		playlist.description,
+		playlist.publishedAt,
+	)
+	hash.Write([]byte(s))
+	sum := hash.Sum(nil)
+	return fmt.Sprintf("%x", sum)
+}
+func (rp *RecentlyPlayed) Set(playlist *Playlist) {
+	key := playlist.hash()
+	if elem, present := rp.cache[key]; present {
+		rp.lru.MoveToFront(elem)
+	} else {
+		elem := rp.lru.PushFront(playlist)
+		rp.size++
+	}
+	rp.cache[key] = elem
+}
+func (rp *RecentlyPlayed) increment(element *list.Element) {
+	rp.lru.MoveToFront(element)
+	if rp.size == rp.capacity {
+		lruItem := rp.lru.Back()
+		rp.lru.Remove(lruItem)
+		rp.size--
+	}
+}
+func (rp *RecentlyPlayed) Set(playlist *Playlist) {
+	key := playlist.hash()
+	if elem, present := rp.cache[key]; present {
+		rp.increment(elem) // <- the change
+	} else {
+		elem := rp.lru.PushFront(playlist)
+		rp.size++
+	}
+	rp.cache[key] = elem
+}
+
+func (rp *RecentlyPlayed) Get(key string) (*Playlist, bool) {
+	if elem, present := rp.cache[key]; present {
+		rp.increment(elem) // <- the change
+		return elem.Value.(*Playlist), true
+	} else {
+		return nil, false
+	}
+}
+func goDotEnvVariable(key string) string {
+
+	// load .env file
+	err := godotenv.Load(".env")
+
+	if err != nil {
+		log.Fatalf("Error loading .env file")
+	}
+
+	return os.Getenv(key)
+}
 func main() {
 	filePtr := flag.String("file", "", "name of file contents to read")
 	dirPtr := flag.String("dir", ".", "directory with all files/root")
@@ -48,7 +166,7 @@ func main() {
 
 	client := spotify.Authenticator{}.NewClient(token)
 	// search for playlists and albums containing "holiday"
-	results, err := client.Search("holiday", spotify.SearchTypePlaylist|spotify.SearchTypeAlbum)
+	results, err := client.Search("Watsky", spotify.SearchTypePlaylist|spotify.SearchTypeAlbum)
 	if err != nil {
 		log.Fatal(err)
 	}
