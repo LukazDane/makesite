@@ -1,9 +1,7 @@
 package main
 
 import (
-	"container/list"
 	"context"
-	"crypto/sha1"
 	"flag"
 	"fmt"
 	"html/template"
@@ -18,142 +16,24 @@ import (
 )
 
 // set up structs to hold song/playlist/album info
+const redirectURI = "http://localhost:8080/callback"
 
-type Song struct {
-	duration int64  //song length in seconds
-	title    string //song title
-	artist   *Artist
-}
+var (
+	auth  = spotify.NewAuthenticator(redirectURI, spotify.ScopeUserReadPrivate)
+	ch    = make(chan *spotify.Client)
+	state = "abc123"
+)
 
-type Playlist struct {
-	title       string
-	description string
-	duration    int64
-	publishedAt int32
-	songs       []*Song
+//Playlists ...
+type Playlists struct {
+	listName []string
 }
 
-type RecentlyPlayed struct {
-	capacity int
-	size     int
-	cache    map[int]*list.Element
-	lru      *list.List
-}
-
-func NewRecentlyPlayed(capacity int) *RecentlyPlayed {
-	rp := RecentlyPlayed{
-		capacity: capacity,
-		size:     0,
-		lru:      list.New(),
-		cache:    make(map[string]*list.Element),
-	}
-	return &rp
-}
-
-type Player struct {
-	playProgress       int
-	RecentlyPlayedList *RecentlyPlayed
-}
-
-func NewPlayer() *Player {
-	p := Player{
-		RecentlyPlayedList: NewRecentlyPlayed(30),
-	}
-	return &p
-}
-func (player *Player) Play(playlist *Playlist) {
-	if cached, playlist := player.RecentlyPlayedList.Get(playlist.hash()); cached {
-		// Play from cache...
-	} else {
-		// Fetch over the network and start playing...
-		player.RecentlyPlayedList.Set(playlist)
-	}
-}
-func (rp *RecentlyPlayed) Get(key string) (*Playlist, bool) {
-	if elem, present := rp.cache[key]; present {
-		rp.lru.MoveToFront(elem)
-		return elem.Value.(*Playlist), true
-	} else {
-		return nil, false
-	}
-}
-func (playlist *Playlist) hash() string {
-	hash := sha1.New()
-	s := fmt.Sprintf(
-		"%d-%s-%s-%d",
-		playlist.duration,
-		playlist.title,
-		playlist.description,
-		playlist.publishedAt,
-	)
-	hash.Write([]byte(s))
-	sum := hash.Sum(nil)
-	return fmt.Sprintf("%x", sum)
-}
-func (rp *RecentlyPlayed) Set(playlist *Playlist) {
-	key := playlist.hash()
-	if elem, present := rp.cache[key]; present {
-		rp.lru.MoveToFront(elem)
-	} else {
-		elem := rp.lru.PushFront(playlist)
-		rp.size++
-	}
-	rp.cache[key] = elem
-}
-func (rp *RecentlyPlayed) increment(element *list.Element) {
-	rp.lru.MoveToFront(element)
-	if rp.size == rp.capacity {
-		lruItem := rp.lru.Back()
-		rp.lru.Remove(lruItem)
-		rp.size--
-	}
-}
-func (rp *RecentlyPlayed) Set(playlist *Playlist) {
-	key := playlist.hash()
-	if elem, present := rp.cache[key]; present {
-		rp.increment(elem) // <- the change
-	} else {
-		elem := rp.lru.PushFront(playlist)
-		rp.size++
-	}
-	rp.cache[key] = elem
-}
-
-func (rp *RecentlyPlayed) Get(key string) (*Playlist, bool) {
-	if elem, present := rp.cache[key]; present {
-		rp.increment(elem) // <- the change
-		return elem.Value.(*Playlist), true
-	} else {
-		return nil, false
-	}
-}
-func goDotEnvVariable(key string) string {
-
-	// load .env file
-	err := godotenv.Load(".env")
-
-	if err != nil {
-		log.Fatalf("Error loading .env file")
-	}
-
-	return os.Getenv(key)
-}
 func main() {
-	filePtr := flag.String("file", "", "name of file contents to read")
-	dirPtr := flag.String("dir", ".", "directory with all files/root")
-	flag.Parse()
-
-	if *filePtr != "" {
-		makePost(*filePtr)
-	} else {
-		parseDir(*dirPtr)
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
 	}
-	// content := readFile(*filePtr)
-	// template := renderTemplate(content)
-	// fileName := strings.SplitN(*filePtr, ".", 2)[0] + ".html"
-	// saveFile(template, fileName)
-	// fmt.Println(template)
-
 	config := &clientcredentials.Config{
 		ClientID:     os.Getenv("SPOTIFY_ID"),
 		ClientSecret: os.Getenv("SPOTIFY_SECRET"),
@@ -165,25 +45,23 @@ func main() {
 	}
 
 	client := spotify.Authenticator{}.NewClient(token)
-	// search for playlists and albums containing "holiday"
-	results, err := client.Search("Watsky", spotify.SearchTypePlaylist|spotify.SearchTypeAlbum)
+	msg, page, err := client.FeaturedPlaylists()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("couldn't get features playlists: %v", err)
 	}
 
-	// handle album results
-	if results.Albums != nil {
-		fmt.Println("Albums:")
-		for _, item := range results.Albums.Albums {
-			fmt.Println("   ", item.Name)
-		}
+	fmt.Println(msg)
+	for _, playlist := range page.Playlists {
+		fmt.Println("Featured: ", playlist.Name)
 	}
-	// handle playlist results
-	if results.Playlists != nil {
-		fmt.Println("Playlists:")
-		for _, item := range results.Playlists.Playlists {
-			fmt.Println("   ", item.Name)
-		}
+	filePtr := flag.String("file", "", "name of file contents to read")
+	dirPtr := flag.String("dir", ".", "directory with all files/root")
+	flag.Parse()
+
+	if *filePtr != "" {
+		makePost(*filePtr)
+	} else {
+		parseDir(*dirPtr)
 	}
 }
 
@@ -197,8 +75,8 @@ func parseDir(dir string) {
 			if f.IsDir() {
 				parseDir(fmt.Sprintf("%s/%s", dir, f.Name()))
 			} else if strings.HasSuffix(f.Name(), ".txt") {
-				fmt.Println(f.Name())
-				fmt.Println(dir + "/" + f.Name())
+				// fmt.Println(f.Name())
+				// fmt.Println(dir + "/" + f.Name())
 				makePost(dir + "/" + f.Name())
 			}
 		}
@@ -247,14 +125,3 @@ func saveFile(buffer string, fileName string) bool {
 
 	return true
 }
-
-// func checkFlags(name string) bool {
-// 	dirFlag := false
-// 	flag.Visit(func(f *flag.Flag) {
-// 		if f.Name == name {
-// 			dirFlag = true
-// 		}
-// 	})
-
-// 	return dirFlag
-// }
